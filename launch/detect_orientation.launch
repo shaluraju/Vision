@@ -1,0 +1,10 @@
+
+<launch>
+
+
+<node type="rviz" name="rviz" pkg="rviz" args="-d $(find detect_orientation)/config/config_file.rviz" />
+
+<node name = "test" pkg = "detect_orientation" type = "test.py" output = "screen"/>
+
+
+</launch>
