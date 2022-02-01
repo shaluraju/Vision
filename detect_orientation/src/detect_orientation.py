@@ -9,6 +9,7 @@ Created on Sun Dec 26 19:05:26 2021
 import rospy
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge, CvBridgeError
+from scipy import ndimage
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
@@ -26,8 +27,13 @@ class Get_image:
         self.bridge = CvBridge()
         self.rate = rospy.Rate(0.2)
         
-        self.pub = rospy.Publisher("/image_received", Image, queue_size = 2)
-        rospy.Subscriber("/camera/left/image_raw", Image, self.image_callback)
+        self.pub_i = rospy.Publisher("/image_received", Image, queue_size = 2)
+        self.pub_e = rospy.Publisher("/edge_detection", Image, queue_size = 1)
+        self.pub_l = rospy.Publisher("/lined_image", Image, queue_size = 1)
+        self.pub_r = rospy.Publisher("/rotated_image", Image, queue_size = 1)
+        #rospy.Subscriber("/camera/left/image_raw", Image, self.image_callback)
+        
+        rospy.Subscriber("/camera/color/image_raw", Image, self.image_callback)
 
     def image_callback(self, msg):
         
@@ -43,11 +49,13 @@ class Get_image:
             self.rate.sleep()
             rospy.loginfo("Image Published")
             if self.image is not None:
-                self.pub.publish(bridge.cv2_to_imgmsg(self.image))
-                Process_Image.detect_orientation(self.image)
+                self.pub_i.publish(bridge.cv2_to_imgmsg(self.image))
+                edged, lined, rotated = Process_Image.detect_orientation(self.image)
+                self.pub_e.publish(bridge.cv2_to_imgmsg(edged))
+                self.pub_l.publish(bridge.cv2_to_imgmsg(lined))
+                self.pub_r.publish(bridge.cv2_to_imgmsg(rotated))
             
             
-        
         
 class Process_Image:
     
@@ -78,35 +86,60 @@ class Process_Image:
         original_Image = image 
         img_gray = cv2.cvtColor(original_Image, cv2.COLOR_BGR2GRAY)
         #Process_Image.plt_imshow("GrayScale", img_gray)
-        img_edges = cv2.Canny(img_gray, 100, 100, apertureSize=3)
-        #img_edges = auto_canny(img_gray)
-               
-        lines = cv2.HoughLinesP(img_edges, 1, math.pi / 180.0, 100, minLineLength=100, maxLineGap=5)
-        #print(lines)
-        angles = []
         
-        for [[x1, y1, x2, y2]] in lines:
-            #cv2.line(original_Image, (x1, y1), (x2, y2), (255, 0, 0), 3)
-            angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
-            angles.append(angle)
-            
-        angles.sort()
-        dummy_angles = []
-        #print(angles)
+        img_edges = cv2.Canny(img_gray, 100, 80, apertureSize=3)
+        #img_edges = Process_Image.auto_canny(img_gray, sigma = 0.6)
+        #Get_image.self.pub_e.publish(img_edges)
+        crop_array_start = [0.3,0.1,0]
+        crop_array_end = [0.6,0.9,1]
         
+        size = img_edges.shape
+        i = 0
+        
+        while True:
+            r = [round(size[0]*crop_array_start[i]), round(size[0]*crop_array_end[i])]
+            c = [round(size[1]*crop_array_start[i]), round(size[1]*crop_array_end[i])]
+            cropped_image = img_edges[r[0]:r[1], c[0]:c[1]]
+
+            lines = cv2.HoughLinesP(cropped_image, 1, math.pi / 180.0, 100, minLineLength=100, maxLineGap=5)            
+            #print(lines)
+            angles = []
+            if np.any(lines != None):
+                for [[x1, y1, x2, y2]] in lines:
+                    cv2.line(original_Image[r[0]:r[1], c[0]:c[1]], (x1, y1), (x2, y2), (255, 0, 0), 3)
+                    angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
+                    angles.append(angle)
+                break
+            if i > 1:
+                break
+            i+=1
+    
+        #angles.sort()
+        dummy_angles = [0]
+        #plt_imshow("Detected lines", img_before)    
+        #print(angles)        
         for i in angles:
-            if i != 0:
+            if abs(i) != 90 and abs(i) != 0:
+                if abs(i) > 80 and abs(i) < 90: # if vertical line
+                    i = 90 - abs(i)
+                    dummy_angles.append(i)
                 dummy_angles.append(i)
+        #        for i in range(len(angles)):
+        #            rospy.loginfo("Angles Detected: %f", angles[i])
         
-            
-        #print("after popping out zeros: ", dummy_angles)
+                    
+#        for i in range(len(dummy_angles)):
+#            rospy.loginfo("after popping out zeros:  %d", dummy_angles[i])
+                
         median_angle = abs(np.median(dummy_angles))
         #print(median_angle)
-        median_angle = 90 - median_angle
+        #median_angle = 90 - median_angle
         # - ve angle gives clockwise rotation
-        #img_rotated = ndimage.rotate(img_before, -median_angle)
+        img_rotated = ndimage.rotate(original_Image, median_angle)
+
         #plt_imshow("Rotated {} degrees".format(round(median_angle,1)), img_rotated)
-        rospy.loginfo("Angle is: %d", median_angle)
+        rospy.loginfo("Angle is: %d", -median_angle)
+        return cropped_image, original_Image, img_rotated
    
 
 
